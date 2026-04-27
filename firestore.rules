@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidProject(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             data.category is string && data.category.size() > 0 && data.category.size() <= 100 &&
+             data.description is string && data.description.size() > 0 &&
+             data.imageUrl is string && data.imageUrl.size() > 0 &&
+             (data.keys().size() <= 10); // Limit number of fields to prevent poisoning
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        // Primary check: Firestore document
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        // Emergency Fallback: Specific Admin Email (for initial setup)
+        request.auth.token.email == 'admin@maqlo.com'
+      );
+    }
+
+    match /projects/{projectId} {
+      allow read: if true; // Publicly readable
+      allow create: if isAdmin() && isValidProject(request.resource.data);
+      allow update: if isAdmin() && isValidProject(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      // Allow creation of first admin or self-registration for the UID (for handleInitializeAdmin)
+      allow create: if isSignedIn() && request.auth.uid == userId && request.resource.data.role == 'admin';
+      allow update: if false; // Role is immutable after creation
+    }
+  }
+}
